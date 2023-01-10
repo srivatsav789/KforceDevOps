@@ -1,0 +1,13 @@
+- hosts: localhost
+  connection: local
+  tasks:
+
+    - name: Create a linux app service plan
+      azure_rm_appserviceplan:
+        resource_group: "{{ resource_group_name }}"
+        name: myAppPlan
+        location: "{{ region }}"
+        sku: S1
+        is_linux: true
+        number_of_workers: 1
+        auth_source: cli

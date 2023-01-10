@@ -1,0 +1,85 @@
+---
+- hosts: all       ###   Windows Hosts to execute the script
+  collections:
+    - community.windows
+    - ansible.windows
+  vars_prompt:
+    - name: ansible_password
+      prompt: "Enter windows password"
+
+  vars:
+    ansible_user: "{{ winuser}}"
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_server_cert_validation: ignore
+  tasks:
+
+  - name: Test connection
+    win_ping:
+
+  - name: run netstat and return Ethernet stats
+    win_command: netstat -e
+    register: netstat
+  - debug: var=netstat
+
+  - name: Remove a file, if present
+    ansible.windows.win_file:
+      path: C:\inetpub\wwwroot
+      state: absent
+
+  - name: Copy folder contents recursively
+    ansible.windows.win_copy:
+      src: files/
+      dest: C:\inetpub\wwwroot
+
+
+  - name: Run basic PowerShell script
+    ansible.windows.win_powershell:
+      script: |
+        Import-Module -Name WebAdministration
+        Install-WindowsFeature -name Web-Server -IncludeManagementTools
+        Install-WindowsFeature web-mgmt-console
+
+
+# Download Internet Information Services (10.0) from Microsoft
+  - name: Download IIS
+    ansible.windows.win_get_url:
+      url: 'https://download.microsoft.com/download/C/E/8/CE8D18F5-D4C0-45B5-B531-ADECD637A1AA/iisexpress_amd64_en-US.msi'
+      dest: 'C:\sites\files\iisexpress_amd64_en-US.msi'
+# Once downloaded, install IIS
+  - name: Install IIS MSI
+    ansible.windows.win_package:
+      path: 'C:\sites\files\iisexpress_amd64_en-US.msi'
+      state: present
+
+# Download and install IIS Managemetn Console.
+  
+
+  - name: Run basic PowerShell script
+    ansible.windows.win_powershell:
+      script: |
+        $IIS = Get-WindowsOptionalFeature -Online -FeatureName “IIS-WebServer”
+        if ($IIS.State -eq "Disabled") {
+        Enable-WindowsOptionalFeature -FeatureName $IIS.FeatureName -Online
+        }
+
+
+
+# Reboot if required.
+  - name: Reboot when Web-Server feature requires it
+    ansible.windows.win_reboot:
+    when: win_feature_result.reboot_required
+
+
+  - name: test IIS site Cats 
+    community.windows.win_iis_website:
+      name: testweb
+      state: started
+      port: 80
+      ip: 127.0.0.1
+      hostname: cats.internet.local
+      application_pool: test
+      physical_path: C:\sites\files
+      parameters: logfile.directory:C:\sites\logs
+    register: website
+  - debug: var=website

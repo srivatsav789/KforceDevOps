@@ -1,0 +1,170 @@
+# Description
+# ===========
+# This playbook creates Infrastructure required for the deployement of IIS on Azure Cloud . It also configures the machine to be accessible via Ansible using WinRM.
+- hosts: localhost
+  connection: local
+
+
+  tasks:
+
+##### Create resource group if already not present ####
+#  - name: Create a resource group
+#      azure_rm_resourcegroup:
+#        name: "{{ rg_name }}"
+#        location: "{{ region }}"
+
+##### Create a Virtual network to host the IIS Virtual Machines ######
+  - name: create Azure virtual network in resource group
+    azure_rm_virtualnetwork:
+      name: "{{ vnet_name }}"
+      resource_group: "{{ resource_group_name }}"
+      address_prefixes_cidr:
+      - 10.1.0.0/16
+      state: present
+
+##### Create a Azure Subnet ###########
+  - name: create Azure subnet in virtualnetwork
+    azure_rm_subnet:
+      name: '{{ sub_name }}'
+      state: present
+      virtual_network_name: "{{ vnet_name }}"
+      resource_group: "{{ resource_group_name }}"
+      address_prefix_cidr: 10.1.0.0/24
+
+##### Create a Azure Storage account ###########
+  - name: create Azure storage account
+    azure_rm_storageaccount:
+      name: '{{ storage_name }}'
+      resource_group: "{{ resource_group_name }}"
+      account_type: Standard_LRS
+
+########## Create a Public IP for the Load Balancer ###########
+  - name: Create public IP address
+    azure_rm_publicipaddress:
+      resource_group: "{{ resource_group_name }}"
+      allocation_method: Static
+      name: pip
+    register: output_pip
+
+########## Output public IP ############
+  - name: Output public ip
+    debug:
+      msg: "The Public ip of Load balancer is {{ output_pip.state.ip_address }}"
+
+########## Create a Security group to open ports for Windows VM ###########
+
+  - name: Create Network Security Group that allows RDP and HTTP access
+    azure_rm_securitygroup:
+      resource_group: "{{ resource_group_name }}"
+      name: "{{ nsg_name }}1"
+      rules:
+        - name: 'allow_rdp'
+          protocol: Tcp
+          destination_port_range: 3389
+          access: Allow
+          priority: 1001
+          direction: Inbound
+        - name: 'allow_web_traffic'
+          protocol: Tcp
+          destination_port_range:
+            - 80
+            - 443
+          access: Allow
+          priority: 1002
+          direction: Inbound
+        - name: 'allow_powershell_remoting'
+          protocol: Tcp
+          destination_port_range:
+            - 5985
+            - 5986
+          access: Allow
+          priority: 1003
+          direction: Inbound
+
+########## Create a Load balancer to route traffic from Internet##########
+  - name: Create a load balancer
+    azure_rm_loadbalancer:
+      name: iis-lb
+      location: "{{ region }}"
+      resource_group: "{{ resource_group_name }}"
+      public_ip: pip
+      probe_protocol: Tcp
+      probe_port: 80
+      probe_interval: 10
+      probe_fail_count: 3
+      protocol: Tcp
+      load_distribution: Default
+      frontend_port: 80
+      backend_port: 8080
+      idle_timeout: 4
+      natpool_frontend_port_start: 1030
+      natpool_frontend_port_end: 1040
+      natpool_backend_port: 80
+      natpool_protocol: Tcp
+
+######## Create a public IP for the Windows VM  NIC#########
+  - name: Create public IP address for IIS server NIC
+    azure_rm_publicipaddress:
+      resource_group: "{{ resource_group_name }}"
+      allocation_method: Static
+      name: vmpip2
+    register: output_vmpip2
+
+  - name: Output public ip
+    debug:
+      msg: "The Public ip of the IIS webserver is {{ output_vmpip2.state.ip_address }}"
+
+  - name: Create a network interface
+    azure_rm_networkinterface:
+      name: nic-iis2
+      resource_group: "{{ resource_group_name }}"
+      virtual_network: "{{ vnet_name }}"
+      subnet_name: '{{ sub_name }}'
+      security_group: "{{ nsg_name }}"
+      ip_configurations:
+        - name: default
+          public_ip_address_name: vmpip2
+          primary: True
+
+######### Provision a Windows 2019 Vm ##########
+  - name: Create VM
+    azure_rm_virtualmachine:
+      resource_group: "{{ resource_group_name }}"
+      name: "{{ server_name }}2"
+      vm_size: Standard_DS1_v2
+      admin_username: "{{ winuser }}"
+      admin_password: "{{ winpass }}"
+      network_interfaces: nic-iis2
+      os_type: Windows
+      storage_account_name: "{{ storage_name }}"
+      virtual_network_name: "{{ vnet_name }}"
+      subnet_name: "{{ sub_name }}"
+      image:
+          offer: WindowsServer
+          publisher: MicrosoftWindowsServer
+          sku: 2019-Datacenter
+          version: latest
+
+
+########### Configure Custom WinRM Listener on the Provisioned VM
+  - name: Create VM script extension to enable HTTPS WinRM listener
+    azure_rm_virtualmachineextension:
+      name: winrm-extension
+      resource_group: "{{ resource_group_name }}"
+      virtual_machine_name: "{{ server_name }}1"
+      publisher: Microsoft.Compute
+      virtual_machine_extension_type: CustomScriptExtension
+      type_handler_version: '1.9'
+      settings: '{"fileUris": ["https://raw.githubusercontent.com/ansible/ansible/devel/examples/scripts/ConfigureRemotingForAnsible.ps1"],"commandToExecute": "powershell -ExecutionPolicy Unrestricted -File ConfigureRemotingForAnsible.ps1"}'
+      auto_upgrade_minor_version: true
+
+  - name: Get facts for one Public IP
+    azure_rm_publicipaddress_info:
+      resource_group: "{{ resource_group_name }}"
+      name: "{{ output_vmpip2.state.ip_address }}"
+    register: publicipaddresses1
+
+  - name: set public ip address fact
+    set_fact: publicipaddress1= "{{ output_vmpip2.state.ip_address }}"
+
+
