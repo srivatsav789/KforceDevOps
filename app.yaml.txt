@@ -1,0 +1,48 @@
+- hosts: localhost
+  connection: local
+  collections:
+    - azure.azcollection
+
+  tasks:
+
+    - name: Create App Service on Linux with Java Runtime
+      azure_rm_webapp:
+        resource_group: "{{ resource_group_name }}"
+        name: "{{ webapp_name }}"
+        plan:
+          resource_group: "{{ resource_group_name }}"
+          name: "{{ plan_name }}"
+          is_linux: true
+          sku: S1
+          number_of_workers: 1
+        frameworks:
+          - name: "java"
+            version: "8"
+            settings:
+              java_container: tomcat
+              java_container_version: "8.5"
+    - name: Get facts of existing App service plan
+      azure_rm_appserviceplan_facts:
+        resource_group: "{{ resource_group_name }}"
+        name: "{{ plan_name }}"
+      register: facts
+
+    - debug:
+        var: facts.appserviceplans[0].sku
+
+    - name: Scale up the App service plan
+      azure_rm_appserviceplan:
+        resource_group: "{{ resource_group_name }}"
+        name: "{{ plan_name }}"
+        is_linux: true
+        sku: S2
+        number_of_workers: 3
+
+    - name: Get facts
+      azure_rm_appserviceplan_facts:
+        resource_group: "{{ resource_group_name }}"
+        name: "{{ plan_name }}"
+      register: facts
+
+    - debug:
+        var: facts.appserviceplans[0].sku
